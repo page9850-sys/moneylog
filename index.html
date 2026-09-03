@@ -891,7 +891,12 @@ async function bulkSaveReviewItems() {
   let done = 0;
   for (const it of toSave) {
     try {
-      const res = await callApi({ action: 'addExpense', ... });
+      const res = await callApi({
+        action: 'addExpense',
+        date: it.date, merchant: it.merchant, amount: it.amount, category: it.category,
+        yongiRatio: it.yongiRatio, gaengiRatio: it.gaengiRatio, memo: it.memo || '',
+        isFixed: it.matched
+      });
       if (res.status !== 'ok') throw new Error(res.message || '저장 실패');
       state.expenses.push({
         rowId: 'temp' + Date.now() + Math.random(), date: it.date, merchant: it.merchant,
@@ -903,7 +908,7 @@ async function bulkSaveReviewItems() {
     }
     done++;
     btn.textContent = `저장 중... (${done}/${toSave.length})`;
-  }
+}
 
   reviewItems = reviewItems.filter(it => !it.include);
   renderReviewArea();
