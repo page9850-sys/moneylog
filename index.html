@@ -727,8 +727,8 @@ function parseOcrText(text) {
     if (!raw) return '';
     // 앞부분에 카드사명 등 " | " 뒤는 버림
     let s = raw.includes('|') ? raw.split('|')[0] : raw;
-    // 한글 완성형/영문/숫자/공백 외 잡음(기호, 낱자모, 특수문자)은 제거
-    s = s.replace(/[^\uAC00-\uD7A3a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    // 한글 완성형/영문/숫자/공백/괄호/하이픈/가운뎃점 외 잡음(낱자모, 특수기호)은 제거
+    s = s.replace(/[^\uAC00-\uD7A3a-zA-Z0-9\s()\-·.]/g, '').replace(/\s+/g, ' ').trim();
     return s.length >= 2 ? s : '';
   }
 
@@ -749,23 +749,41 @@ function parseOcrText(text) {
 
       // 같은 줄에 남은 텍스트에서 우선 가맹점명 시도, 없으면 다음 1~2줄에서 탐색
       let merchant = cleanMerchant(line.replace(amountPattern, ''));
+      let merchantLineIdx = merchant ? i : -1;
       if (!merchant) {
         for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
           const nxt = lines[j];
           if (nxt.match(amountPattern) || nxt.match(dateHeaderPattern)) break;
           merchant = cleanMerchant(nxt);
-          if (merchant) break;
+          if (merchant) { merchantLineIdx = j; break; }
         }
       }
       if (!merchant) merchant = '미상 가맹점';
 
+      // 가맹점명 줄 바로 다음 줄이 새 거래/날짜/카드명 줄바꿈 잔여물이 아니면 개별 메모(예: "용이폰", "동건이폰")로 취급
+      let memo = '';
+      if (merchantLineIdx >= 0) {
+        const nxt = lines[merchantLineIdx + 1];
+        const looksLikeCardNameTail = nxt && (nxt.includes('카드') || /^\(.*\)$/.test(nxt));
+        if (nxt && !looksLikeCardNameTail && !nxt.match(amountPattern) && !nxt.match(dateHeaderPattern) && !nxt.includes('|')) {
+          const cleanedMemo = cleanMerchant(nxt);
+          if (cleanedMemo) memo = cleanedMemo;
+        }
+      }
+
+      // 메모에 용이/갱이가 직접 언급되면 가맹점명 규칙보다 우선 적용 (예: "용이폰", "동건이폰"→ 갱이가 자녀 담당이면 갱이 등 사용자가 확인)
+      let matched = null;
+      if (memo.includes('용이')) matched = '용이';
+      else if (memo.includes('갱이')) matched = '갱이';
+      else matched = matchRule(merchant);
+
       const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
-      const matched = matchRule(merchant);
       items.push({
         id: 'r' + Date.now() + Math.random().toString(36).slice(2, 7),
         date: dateStr,
         merchant,
         amount,
+        memo,
         category: matched || null,
         yongiRatio: matched === '용이' ? 100 : matched === '갱이' ? 0 : 50,
         gaengiRatio: matched === '용이' ? 0 : matched === '갱이' ? 100 : 50,
@@ -816,6 +834,9 @@ function renderReviewRows(container, items) {
         <input type="text" class="rv-merchant" value="${it.merchant}" placeholder="가맹점명">
         <input type="number" class="rv-amount" value="${it.amount}">
       </div>
+      <div class="review-top">
+        <input type="text" class="rv-memo" value="${it.memo || ''}" placeholder="메모 (선택)" style="flex:1; font-size:12px; padding:6px 8px; margin-left:24px;">
+      </div>
       <div class="review-cats">
         <button type="button" class="cat-chip ${it.category === '용이' ? 'selected' : ''}" data-cat="용이">용이</button>
         <button type="button" class="cat-chip ${it.category === '갱이' ? 'selected' : ''}" data-cat="갱이">갱이</button>
@@ -839,6 +860,8 @@ function renderReviewRows(container, items) {
     row.querySelector('.rv-date').addEventListener('change', (e) => { item.date = e.target.value; });
     row.querySelector('.rv-merchant').addEventListener('change', (e) => { item.merchant = e.target.value; });
     row.querySelector('.rv-amount').addEventListener('change', (e) => { item.amount = Number(e.target.value) || 0; });
+    const memoInput = row.querySelector('.rv-memo');
+    if (memoInput) memoInput.addEventListener('change', (e) => { item.memo = e.target.value; });
     row.querySelectorAll('.review-cats .cat-chip').forEach(chip => {
       chip.addEventListener('click', () => {
         item.category = chip.dataset.cat;
@@ -871,13 +894,13 @@ async function bulkSaveReviewItems() {
       await callApi({
         action: 'addExpense',
         date: it.date, merchant: it.merchant, amount: it.amount, category: it.category,
-        yongiRatio: it.yongiRatio, gaengiRatio: it.gaengiRatio, memo: '',
+        yongiRatio: it.yongiRatio, gaengiRatio: it.gaengiRatio, memo: it.memo || '',
         isFixed: it.matched
       });
       state.expenses.push({
         rowId: 'temp' + Date.now() + Math.random(), date: it.date, merchant: it.merchant,
         amount: it.amount, category: it.category, yongiRatio: it.yongiRatio,
-        gaengiRatio: it.gaengiRatio, memo: '', isFixed: it.matched
+        gaengiRatio: it.gaengiRatio, memo: it.memo || '', isFixed: it.matched
       });
     } catch (err) {
       console.warn('저장 실패:', it.merchant, err.message);
